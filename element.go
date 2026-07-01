@@ -40,12 +40,12 @@ func parseElement(content string) (*node, int, error) {
 			i++
 			if i < len(content) && (content[i] == '{' || content[i] == '(' || content[i] == '[') {
 				open := content[i]
-				body, next, ok := scanBalanced(content, i, open, closeOf(open))
+				_, next, ok := scanBalanced(content, i, open, closeOf(open))
 				if !ok {
 					n.text = strings.TrimLeft(content[i:], " ")
 					return n, 1, nil
 				}
-				n.splat = append(n.splat, "{"+strings.TrimSpace(body)+"}")
+				n.splat = append(n.splat, content[i:next])
 				i = next
 			} else {
 				start := i

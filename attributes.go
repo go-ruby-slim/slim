@@ -32,8 +32,8 @@ func scanBareAttrs(n *node, content string, i int) int {
 			// Splat: "*expr" (bare) or "*{..}"/"*(..)"/"*[..]".
 			k := j + 1
 			if k < len(content) && (content[k] == '{' || content[k] == '(' || content[k] == '[') {
-				if b, nx, ok := scanBalanced(content, k, content[k], closeOf(content[k])); ok {
-					n.splat = append(n.splat, "{"+strings.TrimSpace(b)+"}")
+				if _, nx, ok := scanBalanced(content, k, content[k], closeOf(content[k])); ok {
+					n.splat = append(n.splat, content[k:nx])
 					i = nx
 					continue
 				}
@@ -83,15 +83,22 @@ func isAttrNameChar(c byte) bool {
 func scanAttrs(n *node, body string) error {
 	i := 0
 	for i < len(body) {
-		for i < len(body) && (body[i] == ' ' || body[i] == '\t' || body[i] == ',') {
+		for i < len(body) && (body[i] == ' ' || body[i] == '\t') {
 			i++
 		}
 		if i >= len(body) {
 			break
 		}
-		// Splat inside a group: "*expr".
+		// Splat inside a group: "*expr" or "*{..}"/"*(..)"/"*[..]".
 		if body[i] == '*' {
 			i++
+			if i < len(body) && (body[i] == '{' || body[i] == '(' || body[i] == '[') {
+				if _, nx, ok := scanBalanced(body, i, body[i], closeOf(body[i])); ok {
+					n.splat = append(n.splat, body[i:nx])
+					i = nx
+					continue
+				}
+			}
 			start := i
 			for i < len(body) && body[i] != ' ' && body[i] != '\t' {
 				i++
