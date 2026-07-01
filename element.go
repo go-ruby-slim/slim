@@ -5,7 +5,7 @@ import "strings"
 // parseElement parses an element line: an optional tag name, then any mix of
 // ".class"/"#id" shorthand and "*splat"/attribute groups, whitespace-control
 // markers, an optional "/" self-close, and inline content.
-func parseElement(content string) (*node, int, error) {
+func parseElement(content string) (*node, int) {
 	n := &node{kind: kindElement, tag: "div"}
 	i := 0
 
@@ -43,7 +43,7 @@ func parseElement(content string) (*node, int, error) {
 				_, next, ok := scanBalanced(content, i, open, closeOf(open))
 				if !ok {
 					n.text = strings.TrimLeft(content[i:], " ")
-					return n, 1, nil
+					return n, 1
 				}
 				n.splat = append(n.splat, content[i:next])
 				i = next
@@ -60,9 +60,7 @@ func parseElement(content string) (*node, int, error) {
 			if !ok {
 				goto inline
 			}
-			if err := parseAttrGroup(n, body); err != nil {
-				return nil, 0, err
-			}
+			parseAttrGroup(n, body)
 			i = next
 		default:
 			goto bareattrs
@@ -111,7 +109,7 @@ inline:
 			n.textKind = textPlain
 		}
 	}
-	return n, 1, nil
+	return n, 1
 }
 
 // closeOf returns the closing delimiter for an opening bracket.

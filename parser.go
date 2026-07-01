@@ -82,7 +82,7 @@ type dynAttr struct {
 }
 
 // parse splits the template into lines and builds the indentation tree.
-func parse(template string) ([]*node, error) {
+func parse(template string) []*node {
 	lines := splitLines(template)
 
 	type entry struct {
@@ -99,10 +99,7 @@ func parse(template string) ([]*node, error) {
 		}
 		indent := countIndent(ln)
 		content := ln[indent:]
-		n, consumed, err := parseLine(content, indent, lines, i)
-		if err != nil {
-			return nil, err
-		}
+		n, consumed := parseLine(content, indent, lines, i)
 		if n != nil {
 			entries = append(entries, entry{indent, n})
 		}
@@ -128,7 +125,7 @@ func parse(template string) ([]*node, error) {
 		}
 		stack = append(stack, stackItem{e.indent, e.n})
 	}
-	return roots, nil
+	return roots
 }
 
 // splitLines splits on "\n", dropping a single trailing empty element so a
@@ -153,8 +150,7 @@ func countIndent(s string) int {
 
 // parseLine parses one logical line's content (indentation removed) into a node.
 // lines/idx let block indicators (|, ', /!, name:) consume their nested body.
-func parseLine(content string, indent int, lines []string, idx int) (n *node, consumed int, err error) {
-	consumed = 1
+func parseLine(content string, indent int, lines []string, idx int) (n *node, consumed int) {
 	switch content[0] {
 	case '|':
 		return parseVerbatim(content, indent, lines, idx, false)
@@ -164,14 +160,14 @@ func parseLine(content string, indent int, lines []string, idx int) (n *node, co
 		return parseExprLine(content)
 	case '-':
 		ctrl := strings.TrimSpace(content[1:])
-		return &node{kind: kindCode, control: ctrl}, 1, nil
+		return &node{kind: kindCode, control: ctrl}, 1
 	case '/':
 		return parseComment(content, indent, lines, idx)
 	}
 	// "doctype ..." keyword.
 	if content == "doctype" || strings.HasPrefix(content, "doctype ") {
 		arg := strings.TrimSpace(strings.TrimPrefix(content, "doctype"))
-		return &node{kind: kindDoctype, text: arg}, 1, nil
+		return &node{kind: kindDoctype, text: arg}, 1
 	}
 	// Embedded engine "name:" with an indented body (e.g. "javascript:").
 	if en, ok := embeddedEngineName(content); ok {
@@ -202,7 +198,7 @@ func embeddedEngineName(content string) (string, bool) {
 }
 
 // parseExprLine parses a "= expr" or "== expr" output line.
-func parseExprLine(content string) (*node, int, error) {
+func parseExprLine(content string) (*node, int) {
 	rest := content
 	unescaped := false
 	if strings.HasPrefix(rest, "==") {
@@ -220,12 +216,12 @@ func parseExprLine(content string) (*node, int, error) {
 	if unescaped {
 		tk = textUnescaped
 	}
-	return &node{kind: kindExpr, codeExpr: expr, textKind: tk}, 1, nil
+	return &node{kind: kindExpr, codeExpr: expr, textKind: tk}, 1
 }
 
 // parseVerbatim parses a "|" (plain) or "'" (plain + trailing space) verbatim
 // text block: the inline remainder plus any more-indented following lines.
-func parseVerbatim(content string, indent int, lines []string, idx int, trailing bool) (*node, int, error) {
+func parseVerbatim(content string, indent int, lines []string, idx int, trailing bool) (*node, int) {
 	n := &node{kind: kindVerbatim, trailSpaceV: trailing}
 	inline := content[1:]
 	inline = strings.TrimPrefix(inline, " ")
@@ -264,12 +260,12 @@ func parseVerbatim(content string, indent int, lines []string, idx int, trailing
 		consumed--
 	}
 	n.verbatim = body
-	return n, consumed, nil
+	return n, consumed
 }
 
 // parseEngine parses a "name:" embedded engine (javascript:/css:/ruby:) and its
 // indented body block.
-func parseEngine(name string, indent int, lines []string, idx int) (*node, int, error) {
+func parseEngine(name string, indent int, lines []string, idx int) (*node, int) {
 	n := &node{kind: kindEngine, engine: name}
 	consumed := 1
 	j := idx + 1
@@ -303,16 +299,16 @@ func parseEngine(name string, indent int, lines []string, idx int) (*node, int, 
 		consumed--
 	}
 	n.engineBody = body
-	return n, consumed, nil
+	return n, consumed
 }
 
 // parseComment parses a "/" line: "/!"=HTML comment, "/[cond]"=conditional
 // comment, or a bare "/"=silent code comment (discarded with its subtree).
-func parseComment(content string, indent int, lines []string, idx int) (*node, int, error) {
+func parseComment(content string, indent int, lines []string, idx int) (*node, int) {
 	if strings.HasPrefix(content, "/!") {
 		n := &node{kind: kindHTMLComment}
 		n.commentText = strings.TrimSpace(content[2:])
-		return n, 1, nil
+		return n, 1
 	}
 	if strings.HasPrefix(content, "/[") {
 		end := strings.Index(content, "]")
@@ -320,7 +316,7 @@ func parseComment(content string, indent int, lines []string, idx int) (*node, i
 			n := &node{kind: kindCondComment}
 			n.commentCond = content[2:end]
 			n.commentText = strings.TrimSpace(content[end+1:])
-			return n, 1, nil
+			return n, 1
 		}
 	}
 	// Bare "/" code comment: discard this line and any more-indented body.
@@ -339,7 +335,7 @@ func parseComment(content string, indent int, lines []string, idx int) (*node, i
 		consumed++
 		j++
 	}
-	return &node{kind: kindSilent}, consumed, nil
+	return &node{kind: kindSilent}, consumed
 }
 
 // fmtErr wraps a parse error with context.

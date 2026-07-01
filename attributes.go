@@ -9,8 +9,8 @@ import (
 // "{...}"). Slim treats all three wrappers identically: space-separated
 // name=value pairs where value is a quoted string, a bare literal, or a Ruby
 // expression. It delegates to the shared name=value scanner.
-func parseAttrGroup(n *node, body string) error {
-	return scanAttrs(n, body)
+func parseAttrGroup(n *node, body string) {
+	scanAttrs(n, body)
 }
 
 // scanBareAttrs consumes leading, space-separated "name=value" attributes from
@@ -80,7 +80,7 @@ func isAttrNameChar(c byte) bool {
 // scanAttrs scans space-separated Slim attributes ("name=value", "name==value"
 // for an unescaped value, or a bare "name" boolean) out of body and records
 // each on n as a static or dynamic attribute.
-func scanAttrs(n *node, body string) error {
+func scanAttrs(n *node, body string) {
 	i := 0
 	for i < len(body) {
 		for i < len(body) && (body[i] == ' ' || body[i] == '\t') {
@@ -136,7 +136,6 @@ func scanAttrs(n *node, body string) error {
 		i = next
 		addAttr(n, name, val, unescaped)
 	}
-	return nil
 }
 
 // scanAttrValue reads one attribute value starting at body[i]: a quoted string,

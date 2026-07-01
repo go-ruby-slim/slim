@@ -55,10 +55,7 @@ func Compile(template string, opts Options) (src string, err error) {
 	if escapeFn == "" {
 		escapeFn = "::Slim::Helpers.escape_html"
 	}
-	roots, err := parse(template)
-	if err != nil {
-		return "", err
-	}
+	roots := parse(template)
 	c := &compiler{bufVar: bufVar, escapeFn: escapeFn}
 	c.src.WriteString(bufVar + " = ::String.new\n")
 	c.compileTree(roots)
