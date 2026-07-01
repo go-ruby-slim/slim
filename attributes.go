@@ -266,10 +266,7 @@ func staticStringArray(val string) ([]string, bool) {
 	if len(val) < 2 || val[0] != '[' || val[len(val)-1] != ']' {
 		return nil, false
 	}
-	parts, err := splitTopLevel(val[1:len(val)-1], ',')
-	if err != nil {
-		return nil, false
-	}
+	parts := splitTopLevel(val[1:len(val)-1], ',')
 	var out []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -314,7 +311,7 @@ func unescapeRubyStr(s string) string {
 
 // splitTopLevel splits s on sep, ignoring separators inside quotes or nested
 // brackets/braces/parens.
-func splitTopLevel(s string, sep byte) ([]string, error) {
+func splitTopLevel(s string, sep byte) []string {
 	var parts []string
 	depth := 0
 	var quote byte
@@ -346,5 +343,5 @@ func splitTopLevel(s string, sep byte) ([]string, error) {
 		}
 	}
 	parts = append(parts, s[start:])
-	return parts, nil
+	return parts
 }
