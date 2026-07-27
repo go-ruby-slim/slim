@@ -107,6 +107,47 @@ var oracleCorpus = []oracleCase{
 	{"a href==dyn", map[string]string{"dyn": `"<b>"`}},
 	{"p*attrs", map[string]string{"attrs": `{"data-x"=>"1"}`}},
 	{"a *{href: 'x', title: 'y'}", nil},
+	// Inline HTML (literal line + rendered children after, no auto-close).
+	{"<div>\n  p hi", nil},
+	{"<p>Hello #{name}</p>", map[string]string{"name": `"<b>"`}},
+	{"<br>\n<hr>", nil},
+	{"<section>\n  h1 Title\n  p Body", nil},
+	// Text-block continuation: inline text tag consumes deeper lines as text.
+	{"p foo\n  bar\n    baz", nil},
+	{"p text\n  more text", nil},
+	// Multi-line verbatim blocks and offsets.
+	{"p\n  | a\n     b\n    c", nil},
+	{"p\n  |\n    multi\n      indented\n    line", nil},
+	// Verbatim whitespace-control markers.
+	{"p\n  |< x", nil},
+	{"p\n  |> x", nil},
+	{"p\n  |<> x", nil},
+	// Multi-line "/!" HTML comment text block.
+	{"/! comment\n  more\n  lines", nil},
+	// Block expansion (single, chained, with children).
+	{"ul: li Item", nil},
+	{`ul: li: a href="x" Link`, nil},
+	{"ul: li\n  span deep", nil},
+	{"table: tr: td cell", nil},
+	// Output whitespace control (standalone and on tags).
+	{"p=> 1+1", nil},
+	{"p=< 5", nil},
+	{"p=<> 3", nil},
+	{"=> 'x'", nil},
+	{"=< 'y'", nil},
+	{`p==> "<b>"`, nil},
+	// Broken-line continuation.
+	{"= [1,\n   2,\n   3].sum", nil},
+	{"= {a: 1,\n   b: 2}.size", nil},
+	{"- x = [1,\n  2].sum\np= x", nil},
+	{"p= [10,\n  20].max", nil},
+	// Multi-line attribute groups.
+	{"a(href=\"x\"\n  title=\"y\") link", nil},
+	{"a[href=\"x\"\n  data-y=\"z\"]", nil},
+	{"form(action=\"/x\"\n  method=\"post\")\n  input", nil},
+	// Static class shorthand merged with a dynamic class attribute.
+	{"a.static class=dyn", map[string]string{"dyn": `"d"`}},
+	{"a.x.y class=dyn", map[string]string{"dyn": `"z"`}},
 }
 
 func slimAvailable() bool {

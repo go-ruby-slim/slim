@@ -4,16 +4,24 @@ import "strings"
 
 // parseElement parses an element line: an optional tag name, then any mix of
 // ".class"/"#id" shorthand and "*splat"/attribute groups, whitespace-control
-// markers, an optional "/" self-close, and inline content.
-func parseElement(content string) (*node, int) {
+// markers, an optional "/" self-close, block-expansion (":"), and inline
+// content (which, when plain text, consumes a nested text block). lines/idx give
+// the parser context needed to consume that text block; consumed counts the
+// owning line plus any lines the text block or an expanded child pulls in.
+func parseElement(content string, indent int, lines []string, idx int) (*node, int) {
 	n := &node{kind: kindElement, tag: "div"}
 	i := 0
+	lineOff := 0 // physical lines an unclosed attribute group pulled in
 
-	// Tag name.
+	// Tag name. A trailing ":" is never part of the tag (Slim tags end in a word
+	// character); it is left for block-expansion detection below.
 	if isTagStart(content[0]) {
 		start := i
 		for i < len(content) && isTagChar(content[i]) {
 			i++
+		}
+		for i > start && content[i-1] == ':' {
+			i--
 		}
 		n.tag = content[start:i]
 	}
@@ -43,7 +51,7 @@ func parseElement(content string) (*node, int) {
 				_, next, ok := scanBalanced(content, i, open, closeOf(open))
 				if !ok {
 					n.text = strings.TrimLeft(content[i:], " ")
-					return n, 1
+					return n, 1 + lineOff
 				}
 				n.splat = append(n.splat, content[i:next])
 				i = next
@@ -55,10 +63,24 @@ func parseElement(content string) (*node, int) {
 				n.splat = append(n.splat, content[start:i])
 			}
 		case '(', '[', '{':
+			// Attribute group. Slim lets a group span multiple lines: if the
+			// delimiter is not closed on this line, pull in following lines until
+			// it balances (mirroring Parser#parse_attributes calling next_line).
 			open := content[i]
 			body, next, ok := scanBalanced(content, i, open, closeOf(open))
 			if !ok {
-				goto inline
+				orig, off := content, lineOff
+				for !ok && idx+lineOff+1 < len(lines) {
+					lineOff++
+					content += "\n" + lines[idx+lineOff]
+					body, next, ok = scanBalanced(content, i, open, closeOf(open))
+				}
+				if !ok {
+					// Never balanced: not an attribute group. Give back the borrowed
+					// lines and treat the delimiter as the start of inline text.
+					content, lineOff = orig, off
+					goto inline
+				}
 			}
 			parseAttrGroup(n, body)
 			i = next
@@ -88,28 +110,69 @@ bareattrs:
 	}
 
 inline:
-	// Inline content after the tag.
 	rest := content[i:]
+
+	// Block expansion: "tag: child" nests child inside tag on one line. The
+	// remainder after the ":" is parsed as a fresh element line whose subtree
+	// hangs off this tag; the innermost expanded tag receives indent-children.
+	if t := strings.TrimLeft(rest, " \t"); strings.HasPrefix(t, ":") {
+		sub := strings.TrimLeft(t[1:], " \t")
+		if sub != "" {
+			child, consumed := parseElement(sub, indent, lines, idx+lineOff)
+			n.children = append(n.children, child)
+			n.attachTarget = child.attach()
+			return n, lineOff + consumed
+		}
+	}
+
+	// Inline content after the tag.
 	if strings.HasPrefix(rest, " ") || rest == "" {
 		rest = strings.TrimPrefix(rest, " ")
 	}
-	if rest != "" {
-		switch {
-		case strings.HasPrefix(rest, "=="):
-			n.codeExpr = strings.TrimSpace(rest[2:])
-			n.textKind = textUnescaped
-			n.text = "\x00expr"
-		case strings.HasPrefix(rest, "="):
-			r := strings.TrimLeft(rest[1:], "<>")
-			n.codeExpr = strings.TrimSpace(r)
-			n.textKind = textEscaped
-			n.text = "\x00expr"
-		default:
-			n.text = strings.TrimRight(rest, " ")
-			n.textKind = textPlain
-		}
+	if rest == "" {
+		return n, 1 + lineOff
 	}
-	return n, 1
+	switch {
+	case strings.HasPrefix(rest, "=="):
+		expr, l, tr := parseInlineOutput(rest[2:], n.leadSpace, n.trailSpace)
+		expr, consumed := joinBrokenLine(expr, lines, idx+lineOff)
+		n.codeExpr, n.leadSpace, n.trailSpace = expr, l, tr
+		n.textKind = textUnescaped
+		n.text = "\x00expr"
+		return n, 1 + lineOff + consumed
+	case strings.HasPrefix(rest, "="):
+		expr, l, tr := parseInlineOutput(rest[1:], n.leadSpace, n.trailSpace)
+		expr, consumed := joinBrokenLine(expr, lines, idx+lineOff)
+		n.codeExpr, n.leadSpace, n.trailSpace = expr, l, tr
+		n.textKind = textEscaped
+		n.text = "\x00expr"
+		return n, 1 + lineOff + consumed
+	default:
+		// Inline plain text starts a text block that consumes any deeper-indented
+		// following lines (they are text, not child elements). The base column is
+		// where the text begins on the original line: indent + (i+1) accounts for
+		// the consumed prefix and the single space before the text.
+		textIndent := indent + i + 1
+		text, consumed := parseTextBlock(rest, textIndent, indent, lines, idx+lineOff)
+		n.text = text
+		n.textKind = textPlain
+		return n, 1 + lineOff + consumed
+	}
+}
+
+// parseInlineOutput strips the "=<"/"=>" whitespace-control markers from an
+// inline "= expr" / "== expr" tag output and returns the expression plus the
+// (possibly newly set) leading/trailing-space flags.
+func parseInlineOutput(rest string, lead, trail bool) (expr string, l, t bool) {
+	for len(rest) > 0 && (rest[0] == '<' || rest[0] == '>') {
+		if rest[0] == '<' {
+			lead = true
+		} else {
+			trail = true
+		}
+		rest = rest[1:]
+	}
+	return strings.TrimSpace(rest), lead, trail
 }
 
 // closeOf returns the closing delimiter for an opening bracket.

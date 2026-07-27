@@ -6,10 +6,14 @@ import (
 )
 
 // parseAttrGroup parses a wrapped attribute group body ("(...)", "[...]" or
-// "{...}"). Slim treats all three wrappers identically: space-separated
+// "{...}"). Slim treats all three wrappers identically: whitespace-separated
 // name=value pairs where value is a quoted string, a bare literal, or a Ruby
-// expression. It delegates to the shared name=value scanner.
+// expression. A group may span several lines; the newline joins between them are
+// attribute separators, so they are normalised to spaces before scanning.
 func parseAttrGroup(n *node, body string) {
+	if strings.ContainsAny(body, "\n\r") {
+		body = strings.NewReplacer("\n", " ", "\r", " ").Replace(body)
+	}
 	scanAttrs(n, body)
 }
 

@@ -175,6 +175,32 @@ func TestEndsWithDo(t *testing.T) {
 	}
 }
 
+// TestEndsWithBreak covers the empty-string, comma, backslash, and plain
+// branches of the broken-line continuation predicate.
+func TestEndsWithBreak(t *testing.T) {
+	if endsWithBreak("") {
+		t.Error("empty is not a continuation")
+	}
+	if !endsWithBreak("foo,") {
+		t.Error("trailing comma continues")
+	}
+	if !endsWithBreak(`bar\`) {
+		t.Error("trailing backslash continues")
+	}
+	if endsWithBreak("baz") {
+		t.Error("plain line does not continue")
+	}
+}
+
+// TestJoinBrokenLineEOF covers the branch where a continuation character is at
+// end-of-file: the join stops without a following line.
+func TestJoinBrokenLineEOF(t *testing.T) {
+	got, consumed := joinBrokenLine("foo,", []string{"foo,"}, 0)
+	if got != "foo," || consumed != 0 {
+		t.Errorf("EOF continuation: %q %d", got, consumed)
+	}
+}
+
 // TestHasInterp covers both the interpolation-present and absent branches.
 func TestHasInterp(t *testing.T) {
 	if !hasInterp("a #{b} c") {

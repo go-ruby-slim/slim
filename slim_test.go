@@ -72,7 +72,7 @@ func TestCompileGolden(t *testing.T) {
 		{"/ dead\np ok", wrap(`_slimout << "<p>ok</p>"`)},
 		{"/ dead\n  child\np ok", wrap(`_slimout << "<p>ok</p>"`)},
 		{"/! c", wrap(`_slimout << "<!--c-->"`)},
-		{"/!\n  p in", wrap(`_slimout << "<!--<p>in</p>-->"`)},
+		{"/!\n  p in", wrap(`_slimout << "<!--p in-->"`)}, // "/!" body is a text block
 		{"/[if IE]\n  p x", wrap(`_slimout << "<!--[if IE]><p>x</p><![endif]-->"`)},
 		{"/[if IE] txt", wrap(`_slimout << "<!--[if IE]>txt<![endif]-->"`)},
 		{"/unterminated cond", wrap()}, // "/u..." is a bare code comment (no "[")
@@ -87,8 +87,11 @@ func TestCompileGolden(t *testing.T) {
 		{"= y", wrap(`_slimout << ::Slim::Helpers.escape_html((y).to_s)`)},
 		{"p== z", wrap(`_slimout << "<p>"`, `_slimout << (z).to_s`, `_slimout << "</p>"`)},
 		{"== w", wrap(`_slimout << (w).to_s`)},
-		{"=< a", wrap(`_slimout << ::Slim::Helpers.escape_html((a).to_s)`)},
-		{"p=< a", wrap(`_slimout << "<p>"`, `_slimout << ::Slim::Helpers.escape_html((a).to_s)`, `_slimout << "</p>"`)},
+		{"=< a", wrap(`_slimout << " "`, `_slimout << ::Slim::Helpers.escape_html((a).to_s)`)},
+		{"=> a", wrap(`_slimout << ::Slim::Helpers.escape_html((a).to_s)`, `_slimout << " "`)},
+		{"p=< a", wrap(`_slimout << " <p>"`, `_slimout << ::Slim::Helpers.escape_html((a).to_s)`, `_slimout << "</p>"`)},
+		{"p=> a", wrap(`_slimout << "<p>"`, `_slimout << ::Slim::Helpers.escape_html((a).to_s)`, `_slimout << "</p> "`)},
+		{"p==< a", wrap(`_slimout << " <p>"`, `_slimout << (a).to_s`, `_slimout << "</p>"`)},
 		// Verbatim.
 		{"| verbatim", wrap(`_slimout << "verbatim"`)},
 		{"p\n  | a\n  | b", wrap(`_slimout << "<p>ab</p>"`)},
@@ -117,8 +120,37 @@ func TestCompileGolden(t *testing.T) {
 		{"a.c href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"class" => "c", "href" => (url)})`, `_slimout << "></a>"`)},
 		{"a checked=true href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"checked" => true, "href" => (url)})`, `_slimout << "></a>"`)},
 		{"a checked=false href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"checked" => false, "href" => (url)})`, `_slimout << "></a>"`)},
+		// Static ".class" shorthand + dynamic "class=" merge into one array value
+		// (never a duplicate hash key that would drop the static class).
+		{"a.static class=dyn", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"class" => ["static", (dyn)]})`, `_slimout << "></a>"`)},
 		// Blank / whitespace-only lines are skipped.
 		{"p a\n\n  \np b", wrap(`_slimout << "<p>a</p><p>b</p>"`)},
+		// Inline HTML: line emitted verbatim, children rendered after it.
+		{"<div>\n  p hi", wrap(`_slimout << "<div><p>hi</p>"`)},
+		{"<p>Hi #{n}</p>", wrap(`_slimout << "<p>Hi "`, `_slimout << ::Slim::Helpers.escape_html((n).to_s)`, `_slimout << "</p>"`)},
+		// Block expansion (single, chained, and with indent-nested children).
+		{"ul: li Item", wrap(`_slimout << "<ul><li>Item</li></ul>"`)},
+		{`ul: li: a href="x" L`, wrap(`_slimout << "<ul><li><a href=\"x\">L</a></li></ul>"`)},
+		{"ul: li\n  span deep", wrap(`_slimout << "<ul><li><span>deep</span></li></ul>"`)},
+		{"p :sym", wrap(`_slimout << "<p><sym></sym></p>"`)}, // "p :x" still block-expands
+		// Verbatim whitespace markers.
+		{"p\n  |< x", wrap(`_slimout << "<p> x</p>"`)},
+		{"p\n  |> x", wrap(`_slimout << "<p>x </p>"`)},
+		{"p\n  |<> x", wrap(`_slimout << "<p> x </p>"`)},
+		{"' hi", wrap(`_slimout << "hi "`)},
+		// Multi-line text blocks (offset preserved, re-dedent, and "/!" block).
+		{"p foo\n  bar\n    baz", wrap(`_slimout << "<p>foo\nbar\n  baz</p>"`)},
+		{"p\n  |\n      deep\n    shallow", wrap(`_slimout << "<p>deep\nshallow</p>"`)},
+		{"/! a\n  b", wrap(`_slimout << "<!--a\nb-->"`)},
+		// Broken-line continuation ("," / "\") for output and control lines.
+		{"= [1,\n  2].sum", wrap("_slimout << ::Slim::Helpers.escape_html(([1,\n2].sum).to_s)")},
+		{"- x = [1,\n  2]\np= x", wrap("x = [1,\n2]", `_slimout << "<p>"`, `_slimout << ::Slim::Helpers.escape_html((x).to_s)`, `_slimout << "</p>"`)},
+		{"p= foo(1,\n  2)", wrap(`_slimout << "<p>"`, "_slimout << ::Slim::Helpers.escape_html((foo(1,\n2)).to_s)", `_slimout << "</p>"`)},
+		// Multi-line attribute groups.
+		{`a(href="x"` + "\n" + `  title="y") link`, wrap(`_slimout << "<a href=\"x\" title=\"y\">link</a>"`)},
+		{`a[href="x"` + "\n" + `  data-y="z"]`, wrap(`_slimout << "<a data-y=\"z\" href=\"x\"></a>"`)},
+		// An unbalanced "(" that never closes is inline text, not an attr group.
+		{"p foo (bar", wrap(`_slimout << "<p>foo (bar</p>"`)},
 	}
 	for _, tc := range cases {
 		got, err := Compile(tc.tpl, Options{})
