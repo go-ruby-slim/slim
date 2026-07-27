@@ -74,7 +74,13 @@ func (c *compiler) emit(n *node) {
 	case kindVerbatim:
 		c.emitVerbatim(n)
 	case kindExpr:
+		if n.leadSpace {
+			c.pushStatic(" ")
+		}
 		c.emitExpr(n.codeExpr, n.textKind, false)
+		if n.trailSpace {
+			c.pushStatic(" ")
+		}
 	case kindCode:
 		c.emitControl(n)
 	case kindHTMLComment:
@@ -87,7 +93,17 @@ func (c *compiler) emit(n *node) {
 		c.emitEngine(n)
 	case kindDoctype:
 		c.pushStatic(doctypeFor(n.text))
+	case kindInlineHTML:
+		c.emitInlineHTML(n)
 	}
+}
+
+// emitInlineHTML emits a literal inline-HTML line ("<...") with "#{}"
+// interpolation resolved, then renders any indent-nested children after it —
+// Slim does not wrap or auto-close inline HTML.
+func (c *compiler) emitInlineHTML(n *node) {
+	c.emitInterpText(n.text)
+	c.emitNodes(n.children)
 }
 
 // emitExpr emits an "=" / "==" expression. Slim escapes "=" output and leaves
@@ -110,13 +126,15 @@ func (c *compiler) emitControl(n *node) {
 	c.emitNodes(n.children)
 }
 
-// emitVerbatim emits a "|" / "'" verbatim text block: literal lines joined by
-// newlines, with "#{}" interpolation resolved (escaped by default). A "'" block
-// appends a single trailing space.
+// emitVerbatim emits a "|" / "'" verbatim text block: the joined text with
+// "#{}" interpolation resolved (escaped by default), bracketed by the
+// "<"/">"/"'" leading/trailing whitespace-control spaces.
 func (c *compiler) emitVerbatim(n *node) {
-	text := strings.Join(n.verbatim, "\n")
-	c.emitInterpText(text)
-	if n.trailSpaceV {
+	if n.leadSpace {
+		c.pushStatic(" ")
+	}
+	c.emitInterpText(n.text)
+	if n.trailSpace {
 		c.pushStatic(" ")
 	}
 }
@@ -137,11 +155,11 @@ func (c *compiler) emitInterpText(text string) {
 	}
 }
 
-// emitHTMLComment emits a "/!" HTML comment "<!--text-->", including any nested
-// children between the delimiters.
+// emitHTMLComment emits a "/!" HTML comment "<!--text-->"; its body is an
+// interpolated text block ("#{}" resolved, escaped by default).
 func (c *compiler) emitHTMLComment(n *node) {
-	c.pushStatic("<!--" + n.commentText)
-	c.emitNodes(n.children)
+	c.pushStatic("<!--")
+	c.emitInterpText(n.commentText)
 	c.pushStatic("-->")
 }
 
@@ -317,32 +335,60 @@ func (c *compiler) staticAttrString(n *node) (string, error) {
 // dynAttrCall builds the Ruby expression that renders the element's full
 // attribute set (static + dynamic + splat) at eval time via the runtime helper
 // the host provides. Static attributes are folded into the hash as literals so
-// the helper produces the gem-identical ordering and escaping.
+// the helper produces the gem-identical ordering and escaping. Contributions are
+// grouped by name so the hash never carries a duplicate key: every "class"
+// contribution (shorthand, literal, or dynamic) is merged into one array value
+// the helper joins with spaces, and any other repeated attribute keeps its last
+// value — matching how Slim merges attributes.
 func (c *compiler) dynAttrCall(n *node) string {
-	var pairs []string
+	type group struct {
+		name string
+		vals []string
+	}
+	var order []*group
+	byName := map[string]*group{}
+	add := func(name, val string) {
+		g := byName[name]
+		if g == nil {
+			g = &group{name: name}
+			byName[name] = g
+			order = append(order, g)
+		}
+		if name == "class" {
+			g.vals = append(g.vals, val)
+		} else {
+			g.vals = []string{val} // last write wins
+		}
+	}
+
 	for _, sa := range n.staticAttr {
-		key := rubyStrLit(sa.name)
-		var val string
 		switch {
 		case sa.isBool:
 			if sa.boolVal {
-				val = "true"
+				add(sa.name, "true")
 			} else {
-				val = "false"
+				add(sa.name, "false")
 			}
 		default:
-			val = rubyStrLit(sa.value)
+			add(sa.name, rubyStrLit(sa.value))
 		}
-		pairs = append(pairs, key+" => "+val)
 	}
 	for _, da := range n.dynAttr {
-		key := rubyStrLit(da.name)
 		v := "(" + da.expr + ")"
 		if da.unescaped {
 			// "attr==expr": mark the value HTML-safe so the helper skips escaping.
 			v = "::Slim::Helpers.safe(" + v + ")"
 		}
-		pairs = append(pairs, key+" => "+v)
+		add(da.name, v)
+	}
+
+	var pairs []string
+	for _, g := range order {
+		val := g.vals[len(g.vals)-1]
+		if g.name == "class" && len(g.vals) > 1 {
+			val = "[" + strings.Join(g.vals, ", ") + "]"
+		}
+		pairs = append(pairs, rubyStrLit(g.name)+" => "+val)
 	}
 	hash := "{" + strings.Join(pairs, ", ") + "}"
 	call := "::Slim::Helpers.render_attributes(" + hash

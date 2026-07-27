@@ -41,26 +41,35 @@ rendered HTML **byte-for-byte**:
 
 - **Elements & shorthand** — `tag`, `.class`/`#id` (div default),
   `tag.c1.c2#id`, class-merge (space) between shorthand and attributes; a single
-  `id` (duplicates are a compile error, matching the gem).
+  `id` (duplicates are a compile error, matching the gem). **Block expansion**
+  `ul: li: a href="x" Text` nests tags on one line, with indent-children
+  attaching to the innermost tag.
 - **Attributes** — bare `a href="x"`, and every wrapper form `a(href="x")` /
   `a[href="x"]` / `a{href="x"}`; string/number/`true`/`false`/`nil` literals,
   boolean attributes (`checked=true` → `checked=""`, falsy omitted), bare
   booleans inside wrappers (`input(disabled)`), class-array `["a","b"]`,
   alphabetical ordering, escaped values. Dynamic values `href=url`, unescaped
   `attr==expr`, and `*splat` hashes are rendered at eval time via
-  `::Slim::Helpers.render_attributes`.
-- **Output** — inline text, `=` (HTML-escaped Ruby), `==` (unescaped), `-`
+  `::Slim::Helpers.render_attributes`; a static `.class` shorthand and a dynamic
+  `class=` are **merged**, never dropped. **Attribute groups may span multiple
+  lines** — `a(href="x"⏎ title="y")`.
+- **Output** — inline text (which, with deeper-indented following lines, forms a
+  multi-line **text block**), `=` (HTML-escaped Ruby), `==` (unescaped), `-`
   (control, no output), `|` verbatim text block, `'` verbatim + trailing space,
   text interpolation `#{...}` (escaped) / `#{{...}}` (unescaped) / `\#{...}`
-  (literal).
+  (literal). `-` control and `=`/`==` output lines **continue** onto the next
+  line when they end in `,` or `\`.
+- **Inline HTML** — a line beginning with `<` is emitted verbatim (with `#{}`
+  interpolation); indent-nested children render after it, unwrapped.
 - **Control flow** — `- if/elsif/else`, `- case/when`, `- begin/rescue/ensure`
   and `- … do |x|` blocks nest correctly and share a single emitted `end`.
 - **Embedded engines** — `javascript:` → `<script>…</script>`, `css:` →
   `<style>…</style>`, `ruby:` runs the body as code.
 - **Comments & doctype** — code comment `/` (discarded with its subtree), HTML
-  comment `/!`, conditional comment `/[if IE]`, and `doctype html/5/xml/
-  transitional/strict/frameset/1.1/basic/mobile`.
-- **Whitespace control** — `<` (leading space) and `>` (trailing space).
+  comment `/!` (a text block), conditional comment `/[if IE]`, and
+  `doctype html/5/xml/transitional/strict/frameset/1.1/basic/mobile`.
+- **Whitespace control** — tag `<`/`>` (leading/trailing space), output `=<`/`=>`
+  and verbatim `|<`/`|>`/`'` leading/trailing spaces.
 - **Void / self-closing** — the HTML5 void set (`br`, `img`, `input`, …) and the
   explicit `tag/` marker render as `<tag ... />`.
 
@@ -68,11 +77,16 @@ CGO-free, dependency-free, **100% test coverage**, `gofmt` + `go vet` clean, and
 green across the six 64-bit Go targets (amd64, arm64, riscv64, loong64, ppc64le,
 s390x).
 
-### Deferred, honestly
+### Deferred
 
-Text-processing filters that need an external engine — `markdown:`,
+Text-processing filters that need an **external engine** — `markdown:`,
 `scss:`/`sass:`, `coffee:`, `less:` — are **not** compiled; the header parses and
-the raw body is emitted verbatim (best-effort) rather than run through the engine.
+the raw body is emitted verbatim (best-effort) rather than run through the engine
+(naming them keeps the gap explicit). Slim's optional **plugins** — logic-less
+mode, `include`, `Slim::Translator` (I18n), and the smart-text `:smart` option —
+are likewise out of scope. `===` is not a Slim indicator (the gem raises a
+syntax error on it), so it is not implemented.
+
 Everything else in the feature list above matches the gem's rendered HTML
 byte-for-byte in the test corpus.
 

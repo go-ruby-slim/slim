@@ -12,6 +12,12 @@ type node struct {
 	kind     nodeKind
 	children []*node
 
+	// attachTarget, when non-nil, is where indent-nested children attach for a
+	// block-expansion chain ("ul: li"): the outer node links its subtree but the
+	// innermost expanded tag receives the indented children, exactly as Slim
+	// nests them.
+	attachTarget *node
+
 	// Element fields (kindElement).
 	tag          string
 	staticAttr   []staticAttr // .class/#id shorthand + literal attributes
@@ -28,10 +34,6 @@ type node struct {
 	codeExpr string   // Ruby expression for "=" content
 	control  string   // Ruby control statement for "-"
 
-	// Verbatim ("|" / "'") block body lines, dedented relative to the block.
-	verbatim    []string
-	trailSpaceV bool // "'" verbatim adds a trailing space
-
 	// Embedded-engine (javascript:/css:/ruby:) body lines.
 	engine     string
 	engineBody []string
@@ -39,6 +41,15 @@ type node struct {
 	// Comment fields.
 	commentText string
 	commentCond string // conditional-comment condition, e.g. "if IE", or ""
+}
+
+// attach returns the node that indent-nested children of n should be appended
+// to: the innermost tag of a block-expansion chain, or n itself.
+func (n *node) attach() *node {
+	if n.attachTarget != nil {
+		return n.attachTarget
+	}
+	return n
 }
 
 type nodeKind int
@@ -53,6 +64,7 @@ const (
 	kindSilent               // "/" code comment (discarded)
 	kindEngine               // "name:" embedded engine block
 	kindDoctype              // "doctype ..." line
+	kindInlineHTML           // "<..." inline (literal) HTML line
 )
 
 type textKind int
@@ -106,11 +118,13 @@ func parse(template string) []*node {
 		i += consumed
 	}
 
-	// Nest by indentation using a stack.
+	// Nest by indentation using a stack. Each stack item remembers the node that
+	// indent-nested children attach to (attach()), so a block-expansion chain's
+	// innermost tag collects the children.
 	var roots []*node
 	type stackItem struct {
 		indent int
-		n      *node
+		attach *node
 	}
 	var stack []stackItem
 	for _, e := range entries {
@@ -120,10 +134,10 @@ func parse(template string) []*node {
 		if len(stack) == 0 {
 			roots = append(roots, e.n)
 		} else {
-			parent := stack[len(stack)-1].n
+			parent := stack[len(stack)-1].attach
 			parent.children = append(parent.children, e.n)
 		}
-		stack = append(stack, stackItem{e.indent, e.n})
+		stack = append(stack, stackItem{e.indent, e.n.attach()})
 	}
 	return roots
 }
@@ -156,11 +170,13 @@ func parseLine(content string, indent int, lines []string, idx int) (n *node, co
 		return parseVerbatim(content, indent, lines, idx, false)
 	case '\'':
 		return parseVerbatim(content, indent, lines, idx, true)
+	case '<':
+		return parseInlineHTML(content)
 	case '=':
-		return parseExprLine(content)
+		return parseExprLine(content, lines, idx)
 	case '-':
-		ctrl := strings.TrimSpace(content[1:])
-		return &node{kind: kindCode, control: ctrl}, 1
+		ctrl, consumed := joinBrokenLine(content[1:], lines, idx)
+		return &node{kind: kindCode, control: ctrl}, 1 + consumed
 	case '/':
 		return parseComment(content, indent, lines, idx)
 	}
@@ -175,7 +191,15 @@ func parseLine(content string, indent int, lines []string, idx int) (n *node, co
 	}
 	// Everything else is an element (a tag, or .class/#id/* shorthand implying
 	// a div).
-	return parseElement(content)
+	return parseElement(content, indent, lines, idx)
+}
+
+// parseInlineHTML parses a line whose first character is "<": Slim treats it as
+// literal inline HTML. The whole line is emitted verbatim with "#{}"
+// interpolation (escaped by default); indent-nested children render after it,
+// unwrapped — Slim does not auto-close inline HTML.
+func parseInlineHTML(content string) (*node, int) {
+	return &node{kind: kindInlineHTML, text: content}, 1
 }
 
 // embeddedEngineName reports whether content is a bare "name:" embedded-engine
@@ -197,70 +221,120 @@ func embeddedEngineName(content string) (string, bool) {
 	return name, true
 }
 
-// parseExprLine parses a "= expr" or "== expr" output line.
-func parseExprLine(content string) (*node, int) {
-	rest := content
+// parseExprLine parses a "= expr" / "== expr" output line, honouring the
+// "=<" (leading space) and "=>" (trailing space) whitespace-control markers and
+// "," / "\" broken-line continuation onto following lines.
+func parseExprLine(content string, lines []string, idx int) (*node, int) {
+	rest := content[1:]
 	unescaped := false
-	if strings.HasPrefix(rest, "==") {
-		rest = rest[2:]
+	if strings.HasPrefix(rest, "=") {
+		rest = rest[1:]
 		unescaped = true
-	} else {
+	}
+	lead, trail := false, false
+	for len(rest) > 0 && (rest[0] == '<' || rest[0] == '>') {
+		if rest[0] == '<' {
+			lead = true
+		} else {
+			trail = true
+		}
 		rest = rest[1:]
 	}
-	// Slim's "=<" / "=>" whitespace control on output lines is accepted and,
-	// for a lone expression, has no visible effect on the concatenated buffer;
-	// strip the markers so the expression parses.
-	rest = strings.TrimLeft(rest, "<>")
-	expr := strings.TrimSpace(rest)
+	expr, consumed := joinBrokenLine(rest, lines, idx)
 	tk := textEscaped
 	if unescaped {
 		tk = textUnescaped
 	}
-	return &node{kind: kindExpr, codeExpr: expr, textKind: tk}, 1
+	return &node{kind: kindExpr, codeExpr: expr, textKind: tk, leadSpace: lead, trailSpace: trail}, 1 + consumed
 }
 
 // parseVerbatim parses a "|" (plain) or "'" (plain + trailing space) verbatim
-// text block: the inline remainder plus any more-indented following lines.
-func parseVerbatim(content string, indent int, lines []string, idx int, trailing bool) (*node, int) {
-	n := &node{kind: kindVerbatim, trailSpaceV: trailing}
-	inline := content[1:]
-	inline = strings.TrimPrefix(inline, " ")
-	consumed := 1
-	var body []string
-	if inline != "" {
-		body = append(body, inline)
+// text block. The marker may be followed by "<"/">" whitespace-control markers
+// (a leading/trailing literal space) before the text; the inline remainder plus
+// any more-indented following lines form the interpolated text block.
+func parseVerbatim(content string, indent int, lines []string, idx int, apos bool) (*node, int) {
+	rest := content[1:]
+	lead, trail := false, false
+	spaces := 0
+	// Match ([<>]{1,2}(?: |\z)| ?): one or two "<"/">" markers followed by a
+	// space or end-of-line, otherwise a single optional leading space.
+	k := 0
+	for k < len(rest) && k < 2 && (rest[k] == '<' || rest[k] == '>') {
+		k++
 	}
-	j := idx + 1
-	childIndent := -1
-	for j < len(lines) {
+	if k > 0 && (k == len(rest) || rest[k] == ' ') {
+		grp := rest[:k]
+		lead = strings.Contains(grp, "<")
+		trail = strings.Contains(grp, ">")
+		rest = rest[k:]
+		if len(rest) > 0 && rest[0] == ' ' {
+			spaces = 1
+			rest = rest[1:]
+		}
+	} else if len(rest) > 0 && rest[0] == ' ' {
+		spaces = 1
+		rest = rest[1:]
+	}
+	if apos {
+		trail = true
+	}
+	textIndent := indent + spaces + 1
+	text, consumed := parseTextBlock(rest, textIndent, indent, lines, idx)
+	return &node{kind: kindVerbatim, text: text, leadSpace: lead, trailSpace: trail}, 1 + consumed
+}
+
+// parseTextBlock joins firstLine (the inline remainder of the owning line) with
+// every following line indented deeper than ownerIndent, reproducing Slim's
+// Parser#parse_text_block exactly: subsequent lines are separated by newlines
+// and keep their indentation relative to the block's base column (textIndent),
+// while an empty firstLine defers the base column to the first content line.
+// Blank lines inside the block become newlines; blank lines are always consumed.
+// It returns the joined (still un-interpolated) text and the number of lines
+// consumed after the owning line.
+func parseTextBlock(firstLine string, textIndent, ownerIndent int, lines []string, idx int) (string, int) {
+	var b strings.Builder
+	haveBase := firstLine != ""
+	if haveBase {
+		b.WriteString(firstLine)
+	}
+	consumed := 0
+	emptyLines := 0
+	for j := idx + 1; j < len(lines); j++ {
 		ln := lines[j]
 		if strings.TrimSpace(ln) == "" {
-			body = append(body, "")
 			consumed++
-			j++
+			if haveBase {
+				emptyLines++
+			}
 			continue
 		}
 		ci := countIndent(ln)
-		if ci <= indent {
+		if ci <= ownerIndent {
 			break
 		}
-		if childIndent == -1 {
-			childIndent = ci
+		if emptyLines > 0 {
+			b.WriteString(strings.Repeat("\n", emptyLines))
+			emptyLines = 0
 		}
-		strip := childIndent
-		if ci < strip {
-			strip = ci
-		}
-		body = append(body, ln[strip:])
 		consumed++
-		j++
+		body := ln[ci:]
+		offset := 0
+		if haveBase {
+			offset = ci - textIndent
+			if offset < 0 {
+				textIndent += offset
+				offset = 0
+			}
+			b.WriteByte('\n')
+		}
+		b.WriteString(strings.Repeat(" ", offset))
+		b.WriteString(body)
+		if !haveBase {
+			textIndent = ci
+			haveBase = true
+		}
 	}
-	for len(body) > 0 && body[len(body)-1] == "" {
-		body = body[:len(body)-1]
-		consumed--
-	}
-	n.verbatim = body
-	return n, consumed
+	return b.String(), consumed
 }
 
 // parseEngine parses a "name:" embedded engine (javascript:/css:/ruby:) and its
@@ -306,9 +380,17 @@ func parseEngine(name string, indent int, lines []string, idx int) (*node, int) 
 // comment, or a bare "/"=silent code comment (discarded with its subtree).
 func parseComment(content string, indent int, lines []string, idx int) (*node, int) {
 	if strings.HasPrefix(content, "/!") {
-		n := &node{kind: kindHTMLComment}
-		n.commentText = strings.TrimSpace(content[2:])
-		return n, 1
+		// "/!" then an optional space, then an interpolated text block: nested
+		// deeper lines are part of the comment text, not child elements.
+		rest := content[2:]
+		sp := 0
+		if strings.HasPrefix(rest, " ") {
+			sp = 1
+			rest = rest[1:]
+		}
+		textIndent := indent + sp + 2
+		text, consumed := parseTextBlock(rest, textIndent, indent, lines, idx)
+		return &node{kind: kindHTMLComment, commentText: text}, 1 + consumed
 	}
 	if strings.HasPrefix(content, "/[") {
 		end := strings.Index(content, "]")
@@ -336,6 +418,31 @@ func parseComment(content string, indent int, lines []string, idx int) (*node, i
 		j++
 	}
 	return &node{kind: kindSilent}, consumed
+}
+
+// joinBrokenLine reproduces Slim's Parser#parse_broken_line: a "-" control or
+// "=" output whose (stripped) text ends in "," or "\" continues onto the next
+// line, which is itself stripped and appended with a newline, repeating until a
+// line does not end in a continuation character. It returns the joined code and
+// the number of continuation lines consumed.
+func joinBrokenLine(first string, lines []string, idx int) (string, int) {
+	joined := strings.TrimSpace(first)
+	consumed := 0
+	for endsWithBreak(joined) && idx+consumed+1 < len(lines) {
+		consumed++
+		joined += "\n" + strings.TrimSpace(lines[idx+consumed])
+	}
+	return joined, consumed
+}
+
+// endsWithBreak reports whether s ends in a line-continuation character ("," or
+// a backslash).
+func endsWithBreak(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[len(s)-1]
+	return c == ',' || c == '\\'
 }
 
 // fmtErr wraps a parse error with context.
