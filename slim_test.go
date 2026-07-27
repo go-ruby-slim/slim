@@ -120,6 +120,9 @@ func TestCompileGolden(t *testing.T) {
 		{"a.c href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"class" => "c", "href" => (url)})`, `_slimout << "></a>"`)},
 		{"a checked=true href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"checked" => true, "href" => (url)})`, `_slimout << "></a>"`)},
 		{"a checked=false href=url", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"checked" => false, "href" => (url)})`, `_slimout << "></a>"`)},
+		// Static ".class" shorthand + dynamic "class=" merge into one array value
+		// (never a duplicate hash key that would drop the static class).
+		{"a.static class=dyn", wrap(`_slimout << "<a"`, `_slimout << ::Slim::Helpers.render_attributes({"class" => ["static", (dyn)]})`, `_slimout << "></a>"`)},
 		// Blank / whitespace-only lines are skipped.
 		{"p a\n\n  \np b", wrap(`_slimout << "<p>a</p><p>b</p>"`)},
 		// Inline HTML: line emitted verbatim, children rendered after it.
